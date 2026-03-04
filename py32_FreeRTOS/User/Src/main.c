@@ -2,28 +2,79 @@
 #include "usart2_echo.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <string.h>
 
 static TaskHandle_t StartTask_Handler = NULL;   // 启动任务句柄
 static TaskHandle_t LedTask_Handler   = NULL;   // LED 任务句柄
 static TaskHandle_t Usart1_Handler		= NULL;		// USART 任务句柄
 
-// LED 闪烁任务
+
+// 由串口命令控制的LED状态（true=亮，false=灭）
+static volatile bool g_led_on = false;
+
+// LED 任务：根据 g_led_on 持续驱动 LED 引脚
 static void led_task(void *pvParameters){
   (void)pvParameters;						// 避免警告
   while(1){
-    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, g_led_on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    vTaskDelay(pdMS_TO_TICKS(20));         // 周期性刷新，降低抖动与CPU占用
   }
 }
 
-static void usart_task(void *pvParameters){
-	(void)pvParameters;                       // 避免告警
-//	const char u1[] = "USART2_RX";
-	//	USART2_Send((const uint8_t*)u1, (uint16_t)(sizeof(u1) - 1));	// 不能与回显同时使用
-	while(1){
-		USART2_Echo_Task();
-		vTaskDelay(pdMS_TO_TICKS(5));
-	}
+//// USART 任务：回显接收字符
+//static void usart_task(void *pvParameters){
+//	(void)pvParameters;                       // 避免告警
+////	const char u1[] = "USART2_RX";
+//	//	USART2_Send((const uint8_t*)u1, (uint16_t)(sizeof(u1) - 1));	// 不能与回显同时使用
+//	while(1){
+//		USART2_Echo_Task();
+//		vTaskDelay(pdMS_TO_TICKS(5));
+//	}
+//}
+
+// 任务三：串口命令解析（on/off），控制 LED
+// 串口帧以空闲中断(IDLE)划分；收到帧后解析字符串：
+// - "on"  -> 点亮LED
+// - "off" -> 关闭LED
+// 可接受大小写，允许带有 \r \n
+static void usart_cmd_task(void *pvParameters){
+  (void)pvParameters;                       // 避免告警
+  uint8_t  rxbuf[RxBuf_LENGHT2];
+  char     cmd[RxBuf_LENGHT2];
+//  const char ack_on[]  = "LED ON\r\n";
+//  const char ack_off[] = "LED OFF\r\n";
+  const char ack_err[] = "UNKNOWN CMD\r\n";
+
+  while(1){
+    // 等待一帧到达（由IDLE中断置位后返回长度>0）
+    uint16_t n = USART2_ReceiveFrame(rxbuf, sizeof(rxbuf)-1);
+    if (n > 0){
+      // 组装为C字符串并去除结尾的\r\n
+      if (n >= sizeof(cmd)) n = sizeof(cmd)-1;
+      memcpy(cmd, rxbuf, n);
+      cmd[n] = '\0';
+      // 去掉尾部的 \r 和 \n
+      while (n > 0 && (cmd[n-1] == '\r' || cmd[n-1] == '\n')){
+        cmd[--n] = '\0';
+      }
+      // 转小写便于比较
+      for (uint16_t i = 0; i < n; ++i){
+        if (cmd[i] >= 'A' && cmd[i] <= 'Z') cmd[i] = (char)(cmd[i] - 'A' + 'a');
+      }
+      // 匹配命令
+      if (strcmp(cmd, "on") == 0){
+        g_led_on = false;
+//        USART2_Send((const uint8_t*)ack_on, (uint16_t)(sizeof(ack_on)-1));
+      } else if (strcmp(cmd, "off") == 0){
+        g_led_on = true;
+//        USART2_Send((const uint8_t*)ack_off, (uint16_t)(sizeof(ack_off)-1));
+      } else {
+        USART2_Send((const uint8_t*)ack_err, (uint16_t)(sizeof(ack_err)-1));
+      }
+    }
+    // 适度让出CPU
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
 }
 
 // 启动任务：创建 LED 闪烁任务并删除自身
@@ -39,8 +90,9 @@ static void start_task(void *pvParameters){
     Error_Handler();
   }
 	
-	if (xTaskCreate((TaskFunction_t)usart_task,
-                (const char*   )"usart_task",
+  // 停止任务2，创建“任务三”串口命令任务
+	if (xTaskCreate((TaskFunction_t)usart_cmd_task,
+                (const char*   )"usart_cmd_task",
                 192,
                 NULL,
                 1,
@@ -69,7 +121,8 @@ void GPIO_LED_Config(void){
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
+	
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
 }
 
 /**
