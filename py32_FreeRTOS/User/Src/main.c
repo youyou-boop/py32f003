@@ -36,7 +36,6 @@ static void led_task(void *pvParameters){
 // 串口帧以空闲中断(IDLE)划分；收到帧后解析字符串：
 // - "on"  -> 点亮LED
 // - "off" -> 关闭LED
-// 可接受大小写，允许带有 \r \n
 static void usart_cmd_task(void *pvParameters){
   (void)pvParameters;                       // 避免告警
   uint8_t  rxbuf[RxBuf_LENGHT2];
