@@ -18,8 +18,10 @@ static void led_task(void *pvParameters){
 
 static void usart_task(void *pvParameters){
 	(void)pvParameters;                       // 避免告警
+//	const char u1[] = "USART2_RX";
+	//	USART2_Send((const uint8_t*)u1, (uint16_t)(sizeof(u1) - 1));	// 不能与回显同时使用
 	while(1){
-		USART2_Echo_Task();                   
+		USART2_Echo_Task();
 		vTaskDelay(pdMS_TO_TICKS(5));
 	}
 }
